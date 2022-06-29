@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sort"
 	"strings"
 
 	"github.com/docker/docker/api/types"
@@ -127,6 +128,8 @@ func (d Docker) getServices(ctx context.Context, clusterID string) (map[string]*
 		if info == nil {
 			continue
 		}
+
+		sort.Ints(ports)
 
 		serviceName := getServiceName(containerInspect)
 		services[serviceName] = &topology.Service{

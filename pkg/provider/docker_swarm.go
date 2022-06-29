@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"time"
 
@@ -117,6 +118,8 @@ func (d DockerSwarm) getServices(ctx context.Context, clusterID string) (map[str
 		for _, port := range service.Endpoint.Ports {
 			svc.Ports = append(svc.Ports, int(port.TargetPort))
 		}
+
+		sort.Ints(svc.Ports)
 
 		serviceInfo := d.getServiceInfo(loggerSvc.WithContext(ctx), service, networkMap)
 		if serviceInfo == nil {
