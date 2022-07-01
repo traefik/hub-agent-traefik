@@ -93,7 +93,7 @@ func (s *Store) cloneRepository(ctx context.Context) error {
 
 	if err := backoff.RetryNotify(func() error {
 		// Setup local repo for topology files, by cloning hub distant repository.
-		output, err := git.CloneWithContext(ctx, clone.Repository(s.gitRepo), clone.Depth("1"), clone.NoSingleBranch)
+		output, err := git.CloneWithContext(ctx, clone.Repository(s.gitRepo), clone.Depth("1"))
 		if err != nil {
 			switch {
 			case strings.Contains(output, "already exists and is not an empty directory"):
