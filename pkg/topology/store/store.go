@@ -78,7 +78,7 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 
 func (s *Store) cloneRepository(ctx context.Context) error {
 	if disableGitSSLVerify() {
-		output, err := git.Config(config.Global, config.Add("http.sslVerify", "false"), clone.Depth("1"), clone.NoSingleBranch)
+		output, err := git.Config(config.Global, config.Add("http.sslVerify", "false"))
 		if err != nil {
 			return fmt.Errorf("%w: %s", err, output)
 		}
