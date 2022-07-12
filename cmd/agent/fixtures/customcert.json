@@ -1,0 +1,7 @@
+{
+  "domains": ["a.com","b.com"],
+  "notAfter": "2022-05-11T16:58:19.077299+02:00",
+  "notBefore": "2022-05-11T16:58:19.077299+02:00",
+  "certificate":"Y3VzdG9tY2VydA==",
+  "privateKey":"Y3VzdG9ta2V5"
+}

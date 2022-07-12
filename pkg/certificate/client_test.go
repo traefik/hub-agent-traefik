@@ -78,15 +78,19 @@ func TestClient_GetCertificate(t *testing.T) {
 		t.Run(test.desc, func(t *testing.T) {
 			t.Parallel()
 
-			var count int
-
 			c, mux := setup(t)
 
+			var count int
 			mux.HandleFunc("/wildcard-certificate", func(rw http.ResponseWriter, req *http.Request) {
 				count++
 
 				if req.Method != http.MethodGet {
 					http.Error(rw, fmt.Sprintf("unsupported to method: %s", req.Method), http.StatusMethodNotAllowed)
+					return
+				}
+
+				if req.Header.Get("Authorization") != "Bearer token" {
+					http.Error(rw, "Invalid token", http.StatusUnauthorized)
 					return
 				}
 
@@ -104,6 +108,82 @@ func TestClient_GetCertificate(t *testing.T) {
 
 			require.Equal(t, 1, count)
 			assert.Equal(t, test.wantCertificate, gotCertificate)
+		})
+	}
+}
+
+func Test_GetCertificateByDomains(t *testing.T) {
+	tests := []struct {
+		desc       string
+		statusCode int
+		wantCert   Certificate
+		wantErr    error
+	}{
+		{
+			desc:       "get certificate succeed",
+			statusCode: http.StatusOK,
+			wantCert: Certificate{
+				Certificate: []byte("cert"),
+				PrivateKey:  []byte("key"),
+			},
+		},
+		{
+			desc:       "get certificate unexpected error",
+			statusCode: http.StatusTeapot,
+			wantCert:   Certificate{},
+			wantErr: &APIError{
+				StatusCode: http.StatusTeapot,
+				Message:    "error",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+
+		t.Run(test.desc, func(t *testing.T) {
+			t.Parallel()
+
+			c, mux := setup(t)
+
+			var callCount int
+			mux.HandleFunc("/certificate", func(rw http.ResponseWriter, req *http.Request) {
+				callCount++
+
+				if req.Method != http.MethodGet {
+					http.Error(rw, fmt.Sprintf("unsupported method: %s", req.Method), http.StatusMethodNotAllowed)
+					return
+				}
+
+				if req.Header.Get("Authorization") != "Bearer token" {
+					http.Error(rw, "Invalid token", http.StatusUnauthorized)
+					return
+				}
+
+				gotDomain := req.URL.Query()["domains"]
+				assert.Equal(t, []string{"a.com", "b.com"}, gotDomain)
+
+				rw.WriteHeader(test.statusCode)
+
+				switch test.statusCode {
+				case http.StatusAccepted:
+				case http.StatusOK:
+					_ = json.NewEncoder(rw).Encode(test.wantCert)
+
+				default:
+					_ = json.NewEncoder(rw).Encode(APIError{Message: "error"})
+				}
+			})
+
+			gotCert, err := c.GetCertificateByDomains(context.Background(), []string{"a.com", "b.com"})
+			if test.wantErr != nil {
+				require.ErrorAs(t, err, test.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, 1, callCount)
+			assert.Equal(t, test.wantCert, gotCert)
 		})
 	}
 }

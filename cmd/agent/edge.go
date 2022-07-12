@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -62,21 +63,20 @@ func NewEdgeUpdater(certClient *certificate.Client, traefikClient *traefik.Clien
 
 // Update updates Traefik configuration from edge ingresses and ACPs.
 func (e EdgeUpdater) Update(ctx context.Context, ingresses []edge.Ingress, acps []edge.ACP) error {
-	cfg := emptyDynamicConfiguration()
-
-	var err error
-	cfg.HTTP.Middlewares, err = e.acpToMiddleware(acps)
+	cfg, err := e.defaultDynamicConfiguration(ctx)
 	if err != nil {
-		return fmt.Errorf("acp to middleware: %w", err)
+		return fmt.Errorf("default configuration: %w", err)
 	}
 
-	err = e.appendEdgeToTraefikCfg(ctx, cfg, ingresses)
-	if err != nil {
+	if err = e.appendACPToTraefikCfg(cfg, acps); err != nil {
+		return fmt.Errorf("append acp to traefik cfg: %w", err)
+	}
+
+	if err = e.appendEdgeToTraefikCfg(ctx, cfg, ingresses); err != nil {
 		return fmt.Errorf("append edge to traefik cfg: %w", err)
 	}
 
-	err = e.traefikClient.PushDynamic(ctx, time.Now().UnixNano(), cfg)
-	if err != nil {
+	if err = e.traefikClient.PushDynamic(ctx, time.Now().UnixNano(), cfg); err != nil {
 		return fmt.Errorf("push dynamic: %w", err)
 	}
 
@@ -84,48 +84,6 @@ func (e EdgeUpdater) Update(ctx context.Context, ingresses []edge.Ingress, acps 
 }
 
 func (e EdgeUpdater) appendEdgeToTraefikCfg(ctx context.Context, cfg *dynamic.Configuration, edgeIngresses []edge.Ingress) error {
-	cert, err := e.certClient.GetCertificate(ctx)
-	if err != nil {
-		return fmt.Errorf("get certificate: %w", err)
-	}
-
-	cfg.TLS.Certificates = append(cfg.TLS.Certificates, &tls.CertAndStores{
-		Certificate: tls.Certificate{
-			CertFile: string(cert.Certificate),
-			KeyFile:  string(cert.PrivateKey),
-		},
-	})
-
-	cfg.HTTP.Middlewares["strip"] = &dynamic.Middleware{
-		StripPrefixRegex: &dynamic.StripPrefixRegex{
-			Regex: []string{".*"},
-		},
-	}
-
-	cfg.HTTP.Middlewares["add"] = &dynamic.Middleware{
-		AddPrefix: &dynamic.AddPrefix{
-			Prefix: "/edge-ingresses/in-progress",
-		},
-	}
-
-	cfg.HTTP.Routers["catch-all"] = &dynamic.Router{
-		EntryPoints: []string{defaultHubTunnelEntrypoint},
-		Middlewares: []string{"strip", "add"},
-		Service:     "catch-all",
-		Rule:        "PathPrefix(`/`)",
-		Priority:    1,
-		TLS:         &dynamic.RouterTLSConfig{},
-	}
-
-	cfg.HTTP.Services["catch-all"] = &dynamic.Service{
-		LoadBalancer: &dynamic.ServersLoadBalancer{
-			PassHostHeader: func(v bool) *bool { return &v }(false),
-			Servers: []dynamic.Server{
-				{URL: e.catchAllURL},
-			},
-		},
-	}
-
 	for _, ingress := range edgeIngresses {
 		logger := log.With().Str("workspace_id", ingress.WorkspaceID).
 			Str("cluster_id", ingress.ClusterID).
@@ -150,11 +108,35 @@ func (e EdgeUpdater) appendEdgeToTraefikCfg(ctx context.Context, cfg *dynamic.Co
 			middleware = append(middleware, ingress.ACP.Name)
 		}
 
+		var customDomains []string
+		for _, domain := range ingress.CustomDomains {
+			if domain.Verified {
+				customDomains = append(customDomains, domain.Name)
+			}
+		}
+
+		routerRule := fmt.Sprintf("Host(`%s`)", ingress.Domain)
+		if len(customDomains) > 0 {
+			certCustom, err := e.certClient.GetCertificateByDomains(ctx, customDomains)
+			if err != nil {
+				return fmt.Errorf("get certificate by domains %q: %w", strings.Join(customDomains, ","), err)
+			}
+
+			cfg.TLS.Certificates = append(cfg.TLS.Certificates, &tls.CertAndStores{
+				Certificate: tls.Certificate{
+					CertFile: string(certCustom.Certificate),
+					KeyFile:  string(certCustom.PrivateKey),
+				},
+			})
+
+			routerRule = fmt.Sprintf("Host(`%s`)", ingress.Domain+"`,`"+strings.Join(customDomains, "`,`"))
+		}
+
 		cfg.HTTP.Routers[ingress.Name] = &dynamic.Router{
 			EntryPoints: []string{defaultHubTunnelEntrypoint},
 			Middlewares: middleware,
 			Service:     ingress.Name,
-			Rule:        fmt.Sprintf("Host(`%s`)", ingress.Domain),
+			Rule:        routerRule,
 			Priority:    60,
 			TLS:         &dynamic.RouterTLSConfig{},
 		}
@@ -171,16 +153,14 @@ func (e EdgeUpdater) appendEdgeToTraefikCfg(ctx context.Context, cfg *dynamic.Co
 	return nil
 }
 
-func (e EdgeUpdater) acpToMiddleware(acps []edge.ACP) (map[string]*dynamic.Middleware, error) {
-	middlewares := make(map[string]*dynamic.Middleware)
-
+func (e EdgeUpdater) appendACPToTraefikCfg(cfg *dynamic.Configuration, acps []edge.ACP) error {
 	for _, acp := range acps {
 		headerToFwd, err := headerToForward(acp)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
-		middlewares[acp.Name] = &dynamic.Middleware{
+		cfg.HTTP.Middlewares[acp.Name] = &dynamic.Middleware{
 			ForwardAuth: &dynamic.ForwardAuth{
 				Address:             fmt.Sprintf("%s/%s", e.authServerReachableAddr, acp.Name),
 				AuthResponseHeaders: headerToFwd,
@@ -188,24 +168,57 @@ func (e EdgeUpdater) acpToMiddleware(acps []edge.ACP) (map[string]*dynamic.Middl
 		}
 	}
 
-	middlewares[quotaExceededMiddleware] = &dynamic.Middleware{
-		IPWhiteList: &dynamic.IPWhiteList{
-			SourceRange: []string{"8.8.8.8"},
-			IPStrategy: &dynamic.IPStrategy{
-				ExcludedIPs: []string{"0.0.0.0/0"},
-			},
-		},
-	}
-
-	return middlewares, nil
+	return nil
 }
 
-func emptyDynamicConfiguration() *dynamic.Configuration {
+func (e EdgeUpdater) defaultDynamicConfiguration(ctx context.Context) (*dynamic.Configuration, error) {
+	cert, err := e.certClient.GetCertificate(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get certificate: %w", err)
+	}
+
 	return &dynamic.Configuration{
 		HTTP: &dynamic.HTTPConfiguration{
-			Routers:           make(map[string]*dynamic.Router),
-			Middlewares:       make(map[string]*dynamic.Middleware),
-			Services:          make(map[string]*dynamic.Service),
+			Routers: map[string]*dynamic.Router{
+				"catch-all": {
+					EntryPoints: []string{defaultHubTunnelEntrypoint},
+					Middlewares: []string{"strip", "add"},
+					Service:     "catch-all",
+					Rule:        "PathPrefix(`/`)",
+					Priority:    1,
+					TLS:         &dynamic.RouterTLSConfig{},
+				},
+			},
+			Middlewares: map[string]*dynamic.Middleware{
+				quotaExceededMiddleware: {
+					IPWhiteList: &dynamic.IPWhiteList{
+						SourceRange: []string{"8.8.8.8"},
+						IPStrategy: &dynamic.IPStrategy{
+							ExcludedIPs: []string{"0.0.0.0/0"},
+						},
+					},
+				},
+				"strip": {
+					StripPrefixRegex: &dynamic.StripPrefixRegex{
+						Regex: []string{".*"},
+					},
+				},
+				"add": {
+					AddPrefix: &dynamic.AddPrefix{
+						Prefix: "/edge-ingresses/in-progress",
+					},
+				},
+			},
+			Services: map[string]*dynamic.Service{
+				"catch-all": {
+					LoadBalancer: &dynamic.ServersLoadBalancer{
+						PassHostHeader: func(v bool) *bool { return &v }(false),
+						Servers: []dynamic.Server{
+							{URL: e.catchAllURL},
+						},
+					},
+				},
+			},
 			ServersTransports: make(map[string]*dynamic.ServersTransport),
 		},
 		TCP: &dynamic.TCPConfiguration{
@@ -215,12 +228,20 @@ func emptyDynamicConfiguration() *dynamic.Configuration {
 		TLS: &dynamic.TLSConfiguration{
 			Stores:  make(map[string]tls.Store),
 			Options: make(map[string]tls.Options),
+			Certificates: []*tls.CertAndStores{
+				{
+					Certificate: tls.Certificate{
+						CertFile: string(cert.Certificate),
+						KeyFile:  string(cert.PrivateKey),
+					},
+				},
+			},
 		},
 		UDP: &dynamic.UDPConfiguration{
 			Routers:  make(map[string]*dynamic.UDPRouter),
 			Services: make(map[string]*dynamic.UDPService),
 		},
-	}
+	}, nil
 }
 
 func headerToForward(acp edge.ACP) ([]string, error) {

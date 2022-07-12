@@ -99,6 +99,33 @@ func (c *Client) GetCertificate(ctx context.Context) (Certificate, error) {
 	return cert, nil
 }
 
+// GetCertificateByDomains obtains a certificate for the workspace.
+func (c *Client) GetCertificateByDomains(ctx context.Context, domains []string) (Certificate, error) {
+	baseURL, err := c.baseURL.Parse(path.Join(c.baseURL.Path, "/certificate"))
+	if err != nil {
+		return Certificate{}, fmt.Errorf("parse endpoint: %w", err)
+	}
+
+	query := baseURL.Query()
+	for _, domain := range domains {
+		query.Add("domains", domain)
+	}
+	baseURL.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL.String(), http.NoBody)
+	if err != nil {
+		return Certificate{}, fmt.Errorf("build request: %w", err)
+	}
+
+	var cert Certificate
+	err = c.do(req, &cert)
+	if err != nil {
+		return Certificate{}, err
+	}
+
+	return cert, nil
+}
+
 func (c Client) do(req *http.Request, result interface{}) error {
 	req.Header.Set("Authorization", "Bearer "+c.token)
 

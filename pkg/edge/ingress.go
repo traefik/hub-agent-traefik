@@ -28,13 +28,20 @@ type Ingress struct {
 	Namespace   string `json:"namespace"`
 	Name        string `json:"name"`
 
-	Domain  string   `json:"domain"`
-	Service Service  `json:"service"`
-	ACP     *ACPInfo `json:"acp,omitempty"`
+	Domain        string   `json:"domain"`
+	CustomDomains []Domain `json:"customDomains"`
+	Service       Service  `json:"service"`
+	ACP           *ACPInfo `json:"acp,omitempty"`
 
 	Version   string    `json:"version"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// Domain holds domain information.
+type Domain struct {
+	Name     string `json:"name"`
+	Verified bool   `json:"verified"`
 }
 
 // Service represents an endpoint for an Ingress.
