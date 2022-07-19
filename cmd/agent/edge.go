@@ -172,7 +172,7 @@ func (e EdgeUpdater) appendACPToTraefikCfg(cfg *dynamic.Configuration, acps []ed
 }
 
 func (e EdgeUpdater) defaultDynamicConfiguration(ctx context.Context) (*dynamic.Configuration, error) {
-	cert, err := e.certClient.GetCertificate(ctx)
+	cert, err := e.certClient.GetWildcardCertificate(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get certificate: %w", err)
 	}

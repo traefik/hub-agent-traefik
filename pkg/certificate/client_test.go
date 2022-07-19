@@ -103,7 +103,7 @@ func TestClient_GetCertificate(t *testing.T) {
 				}
 			})
 
-			gotCertificate, err := c.GetCertificate(context.Background())
+			gotCertificate, err := c.GetWildcardCertificate(context.Background())
 			test.wantError(t, err)
 
 			require.Equal(t, 1, count)

@@ -78,8 +78,8 @@ func NewClient(baseURL, token string) (*Client, error) {
 	}, nil
 }
 
-// GetCertificate obtains a certificate for the workspace.
-func (c *Client) GetCertificate(ctx context.Context) (Certificate, error) {
+// GetWildcardCertificate obtains a certificate for the workspace.
+func (c *Client) GetWildcardCertificate(ctx context.Context) (Certificate, error) {
 	baseURL, err := c.baseURL.Parse(path.Join(c.baseURL.Path, "/wildcard-certificate"))
 	if err != nil {
 		return Certificate{}, fmt.Errorf("parse endpoint: %w", err)
