@@ -44,7 +44,7 @@ import (
 
 // ProviderWatcher watches provider changes.
 type ProviderWatcher interface {
-	Watch(ctx context.Context, clusterID string, fn func(map[string]*topology.Service)) error
+	Watch(ctx context.Context, fn func(map[string]*topology.Service)) error
 	GetIP(ctx context.Context, containerName, network string) (string, error)
 }
 
@@ -206,7 +206,7 @@ func (r runCmd) runAgent(cliCtx *cli.Context) error {
 		return fmt.Errorf("new platform client: %w", err)
 	}
 
-	agentCfg, clusterID, err := initAgent(cliCtx.Context, platformClient)
+	agentCfg, err := initAgent(cliCtx.Context, platformClient)
 	if err != nil {
 		return fmt.Errorf("get platform config: %w", err)
 	}
@@ -270,14 +270,7 @@ func (r runCmd) runAgent(cliCtx *cli.Context) error {
 		dockerProvider = provider.NewDocker(dockerClient, traefikHost)
 	}
 
-	config := topostore.Config{
-		TopologyConfig: agentCfg.Topology,
-		Token:          token,
-	}
-	store, err := topostore.New(cliCtx.Context, config)
-	if err != nil {
-		return fmt.Errorf("create topology store: %w", err)
-	}
+	store := topostore.New(platformClient)
 
 	cfgWatcher := platform.NewConfigWatcher(15*time.Minute, platformClient)
 	metricsMgr, metricsStore, err := newMetrics(token, platformURL, agentCfg.Metrics, cfgWatcher, traefikClient)
@@ -316,7 +309,7 @@ func (r runCmd) runAgent(cliCtx *cli.Context) error {
 	})
 
 	group.Go(func() error {
-		return listenDocker(ctx, dockerProvider, store, clusterID)
+		return listenDocker(ctx, dockerProvider, store)
 	})
 
 	group.Go(func() error {
@@ -368,22 +361,10 @@ func createDockerClientOpts(cliCtx *cli.Context) provider.DockerClientOpts {
 	return dcOpts
 }
 
-func listenDocker(ctx context.Context, dockerProvider ProviderWatcher, store *topostore.Store, clusterID string) error {
-	err := dockerProvider.Watch(ctx, clusterID, func(services map[string]*topology.Service) {
-		cluster := &topology.Cluster{
-			ID: clusterID,
-			Overview: topology.Overview{
-				ServiceCount:           len(services),
-				IngressControllerTypes: []string{"traefik"},
-			},
+func listenDocker(ctx context.Context, dockerProvider ProviderWatcher, store *topostore.Store) error {
+	err := dockerProvider.Watch(ctx, func(services map[string]*topology.Service) {
+		cluster := topology.Cluster{
 			Services: services,
-			IngressControllers: map[string]*topology.IngressController{
-				"traefik@traefik": {
-					Name: "traefik@traefik",
-					Kind: "Multiplatform",
-					Type: "traefik",
-				},
-			},
 		}
 
 		err := store.Write(ctx, cluster)
@@ -413,16 +394,16 @@ func getAgentReachableAddress(ctx context.Context, traefikClient *traefik.Client
 	return "http://" + net.JoinHostPort(reachableIP, port), nil
 }
 
-func initAgent(ctx context.Context, platformClient *platform.Client) (platform.Config, string, error) {
-	clusterID, err := platformClient.Link(ctx)
+func initAgent(ctx context.Context, platformClient *platform.Client) (platform.Config, error) {
+	_, err := platformClient.Link(ctx)
 	if err != nil {
-		return platform.Config{}, "", fmt.Errorf("link agent: %w", err)
+		return platform.Config{}, fmt.Errorf("link agent: %w", err)
 	}
 
 	agentCfg, err := platformClient.GetConfig(ctx)
 	if err != nil {
-		return platform.Config{}, "", fmt.Errorf("fetch agent config: %w", err)
+		return platform.Config{}, fmt.Errorf("fetch agent config: %w", err)
 	}
 
-	return agentCfg, clusterID, nil
+	return agentCfg, nil
 }

@@ -51,12 +51,12 @@ func NewDockerSwarm(dockerClient client.APIClient, traefikHost string, interval 
 }
 
 // Watch watches docker events.
-func (d DockerSwarm) Watch(ctx context.Context, clusterID string, fn func(map[string]*topology.Service)) error {
+func (d DockerSwarm) Watch(ctx context.Context, fn func(map[string]*topology.Service)) error {
 	ticker := time.NewTicker(d.interval)
 
-	log.Info().Str("cluster_id", clusterID).Msg("watch")
+	log.Info().Msg("watch")
 
-	services, err := d.getServices(ctx, clusterID)
+	services, err := d.getServices(ctx)
 	if err == nil {
 		fn(services)
 	}
@@ -65,7 +65,7 @@ func (d DockerSwarm) Watch(ctx context.Context, clusterID string, fn func(map[st
 		for {
 			select {
 			case <-ticker.C:
-				services, err := d.getServices(ctx, clusterID)
+				services, err := d.getServices(ctx)
 				if err != nil {
 					log.Error().Err(err).Msg("Failed to list services for docker")
 					continue
@@ -85,9 +85,7 @@ func (d DockerSwarm) Watch(ctx context.Context, clusterID string, fn func(map[st
 	return nil
 }
 
-func (d DockerSwarm) getServices(ctx context.Context, clusterID string) (map[string]*topology.Service, error) {
-	logger := log.With().Str("cluster_id", clusterID).Logger()
-
+func (d DockerSwarm) getServices(ctx context.Context) (map[string]*topology.Service, error) {
 	traefikIP, err := getTraefikIP(d.traefikHost)
 	if err != nil {
 		return nil, fmt.Errorf("get Traefik IP: %w", err)
@@ -98,7 +96,7 @@ func (d DockerSwarm) getServices(ctx context.Context, clusterID string) (map[str
 		return nil, fmt.Errorf("list services: %w", err)
 	}
 
-	networkMap, err := d.getFilteredNetworks(logger.WithContext(ctx), serviceList, traefikIP)
+	networkMap, err := d.getFilteredNetworks(ctx, serviceList, traefikIP)
 	if err != nil {
 		return nil, fmt.Errorf("get filtered networks: %w", err)
 	}
@@ -106,11 +104,10 @@ func (d DockerSwarm) getServices(ctx context.Context, clusterID string) (map[str
 	services := make(map[string]*topology.Service)
 	for _, service := range serviceList {
 		svc := &topology.Service{
-			Name:      strings.TrimPrefix(service.Spec.Name, "/"),
-			ClusterID: clusterID,
+			Name: strings.TrimPrefix(service.Spec.Name, "/"),
 		}
 
-		loggerSvc := log.With().Str("cluster_id", clusterID).
+		loggerSvc := log.With().
 			Str("service_id", service.ID).
 			Str("service_name", svc.Name).
 			Logger()

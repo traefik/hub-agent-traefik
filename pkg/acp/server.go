@@ -72,9 +72,10 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.Handle("/", s.handler)
 
 	server := &http.Server{
-		Addr:     s.listenAddr,
-		Handler:  mux,
-		ErrorLog: stdlog.New(log.Logger.Level(zerolog.DebugLevel), "", 0),
+		Addr:              s.listenAddr,
+		Handler:           mux,
+		ErrorLog:          stdlog.New(log.Logger.Level(zerolog.DebugLevel), "", 0),
+		ReadHeaderTimeout: 2 * time.Second,
 	}
 
 	srvDone := make(chan struct{})

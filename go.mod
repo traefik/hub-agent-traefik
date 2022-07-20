@@ -1,19 +1,18 @@
 module github.com/traefik/hub-agent-traefik
 
-go 1.17
+go 1.18
 
 require (
 	github.com/abbot/go-http-auth v0.4.0
-	github.com/cenkalti/backoff/v4 v4.1.3
 	github.com/docker/cli v20.10.17+incompatible
 	github.com/docker/docker v20.10.17+incompatible
 	github.com/docker/go-connections v0.4.0
 	github.com/ettle/strcase v0.1.1
+	github.com/evanphx/json-patch v0.5.2
 	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/gorilla/websocket v1.5.0
 	github.com/hamba/avro v1.8.0
 	github.com/hashicorp/go-retryablehttp v0.7.1
-	github.com/ldez/go-git-cmd-wrapper/v2 v2.3.0
 	github.com/pquerna/cachecontrol v0.1.0
 	github.com/prometheus/client_model v0.2.0
 	github.com/prometheus/common v0.35.0

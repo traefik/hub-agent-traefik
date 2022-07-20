@@ -11,8 +11,8 @@ jobs:
     name: Build on branches
     runs-on: ubuntu-20.04
     env:
-      GO_VERSION: 1.17
-      GOLANGCI_LINT_VERSION: v1.46.2
+      GO_VERSION: 1.18
+      GOLANGCI_LINT_VERSION: v1.47.1
 
     steps:
 

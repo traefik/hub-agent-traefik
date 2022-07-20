@@ -72,6 +72,11 @@ func String() string {
 	return fmt.Sprintf("%s, build %s on %s", version, commit, date)
 }
 
+// Version returns the agent version.
+func Version() string {
+	return version
+}
+
 // Log logs the full version information.
 func Log() {
 	log.Info().

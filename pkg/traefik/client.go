@@ -33,6 +33,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"time"
 
 	"github.com/hashicorp/go-retryablehttp"
 	dto "github.com/prometheus/client_model/go"
@@ -190,7 +191,7 @@ func (c *Client) GetAgentReachableIP(ctx context.Context) (string, error) {
 		}
 	})
 
-	s := &http.Server{Handler: mux}
+	s := &http.Server{Handler: mux, ReadHeaderTimeout: 2 * time.Second}
 
 	defer func() { _ = s.Close() }()
 

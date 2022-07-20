@@ -54,7 +54,7 @@ func NewDocker(dockerClient client.APIClient, traefikHost string) *Docker {
 }
 
 // Watch watches docker events.
-func (d Docker) Watch(ctx context.Context, clusterID string, fn func(map[string]*topology.Service)) error {
+func (d Docker) Watch(ctx context.Context, fn func(map[string]*topology.Service)) error {
 	f := filters.NewArgs()
 	f.Add("type", "container")
 	options := types.EventsOptions{
@@ -62,7 +62,7 @@ func (d Docker) Watch(ctx context.Context, clusterID string, fn func(map[string]
 	}
 
 	startStopHandle := func(_ eventtypes.Message) {
-		services, err := d.getServices(ctx, clusterID)
+		services, err := d.getServices(ctx)
 		if err != nil {
 			log.Error().Err(err).Send()
 			return
@@ -95,7 +95,7 @@ func (d Docker) Watch(ctx context.Context, clusterID string, fn func(map[string]
 	}
 }
 
-func (d Docker) getServices(ctx context.Context, clusterID string) (map[string]*topology.Service, error) {
+func (d Docker) getServices(ctx context.Context) (map[string]*topology.Service, error) {
 	networks, err := d.getTraefikNetworks(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get Traefik networks: %w", err)
@@ -134,7 +134,6 @@ func (d Docker) getServices(ctx context.Context, clusterID string) (map[string]*
 		serviceName := getServiceName(containerInspect)
 		services[serviceName] = &topology.Service{
 			Name:      serviceName,
-			ClusterID: clusterID,
 			Container: info,
 			Ports:     ports,
 		}

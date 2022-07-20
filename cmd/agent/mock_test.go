@@ -25,7 +25,7 @@ import (
 
 type providerMock struct{}
 
-func (m providerMock) Watch(ctx context.Context, clusterID string, fn func(map[string]*topology.Service)) error {
+func (m providerMock) Watch(ctx context.Context, fn func(map[string]*topology.Service)) error {
 	return nil
 }
 

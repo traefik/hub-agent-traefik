@@ -18,131 +18,102 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"strings"
-	"time"
+	"net/http"
 
-	"github.com/cenkalti/backoff/v4"
-	"github.com/ldez/go-git-cmd-wrapper/v2/clone"
-	"github.com/ldez/go-git-cmd-wrapper/v2/config"
-	"github.com/ldez/go-git-cmd-wrapper/v2/git"
-	"github.com/ldez/go-git-cmd-wrapper/v2/remote"
-	"github.com/ldez/go-git-cmd-wrapper/v2/types"
+	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/rs/zerolog/log"
 	"github.com/traefik/hub-agent-traefik/pkg/platform"
+	"github.com/traefik/hub-agent-traefik/pkg/topology"
 )
 
-// Config represents the topology store config.
-type Config struct {
-	platform.TopologyConfig
-
-	Token string
+// PlatformClient is capable of interacting with the platform.
+type PlatformClient interface {
+	FetchTopology(ctx context.Context) (topo topology.Cluster, version int64, err error)
+	PatchTopology(ctx context.Context, patch []byte, lastKnownVersion int64) (int64, error)
 }
 
-// Store stores a state in a Git repository.
+// Store stores the topology on the platform.
 type Store struct {
-	gitRepo     string
-	gitExecutor types.Executor
-	workingDir  string
+	platform      PlatformClient
+	maxPatchRetry int
+
+	lastTopology     []byte
+	lastKnownVersion int64
 }
 
 // New instantiates a new Store.
-func New(ctx context.Context, cfg Config) (*Store, error) {
-	repoURL := fmt.Sprintf("https://%s:@%s/%s/%s.git", cfg.Token, cfg.GitProxyHost, cfg.GitOrgName, cfg.GitRepoName)
-
-	s := &Store{
-		gitRepo:    repoURL,
-		workingDir: cfg.GitRepoName,
-		gitExecutor: func(ctx context.Context, name string, debug bool, args ...string) (string, error) {
-			cmd := exec.CommandContext(ctx, name, args...)
-			cmd.Dir = cfg.GitRepoName
-
-			out, err := cmd.CombinedOutput()
-			output := string(out)
-
-			log.Trace().Str("cmd", name).Strs("args", args).Str("output", output).Send()
-
-			return output, err
-		},
+func New(platformClient PlatformClient) *Store {
+	return &Store{
+		platform:      platformClient,
+		maxPatchRetry: 5,
 	}
-
-	if err := s.cloneRepository(ctx); err != nil {
-		return nil, err
-	}
-
-	return s, nil
 }
 
-func (s *Store) cloneRepository(ctx context.Context) error {
-	if disableGitSSLVerify() {
-		output, err := git.Config(config.Global, config.Add("http.sslVerify", "false"))
-		if err != nil {
-			return fmt.Errorf("%w: %s", err, output)
-		}
-		log.Info().Msg("Git SSL verify disabled")
-	}
+// Write writes the topology on the platform.
+func (s *Store) Write(ctx context.Context, st topology.Cluster) error {
+	retryCount := 0
 
-	// Since repository creation is asynchronous, it is possible that it is not created just yet, so retry a bit.
-	exp := backoff.NewExponentialBackOff()
-	exp.InitialInterval = time.Second
-	exp.MaxInterval = 15 * time.Second
-	exp.RandomizationFactor = 0
-
-	if err := backoff.RetryNotify(func() error {
-		// Setup local repo for topology files, by cloning hub distant repository.
-		output, err := git.CloneWithContext(ctx, clone.Repository(s.gitRepo), clone.Depth("1"))
-		if err != nil {
-			switch {
-			case strings.Contains(output, "already exists and is not an empty directory"):
-				return s.updateOriginURL()
-			case strings.Contains(output, "remote: Repository not found"):
-				return fmt.Errorf("remote repository not ready")
-			default:
-				return fmt.Errorf("create local repository: %w %s", err, output)
+	for {
+		if s.lastKnownVersion == 0 {
+			topo, version, err := s.platform.FetchTopology(ctx)
+			if err != nil {
+				return fmt.Errorf("fetch topology: %w", err)
 			}
+
+			s.lastTopology, err = json.Marshal(topo)
+			if err != nil {
+				return fmt.Errorf("marshal topology: %w", err)
+			}
+
+			s.lastKnownVersion = version
 		}
-		return nil
-	}, exp, func(err error, retryIn time.Duration) {
-		log.Warn().Err(err).Dur("retry_in", retryIn).Msg("Unable to clone topology repository")
-	}); err != nil {
-		return err
-	}
 
-	output, err := git.Config(config.Local, config.Add("user.email", "hubagent@traefik.io"), git.CmdExecutor(s.gitExecutor))
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, output)
-	}
-
-	output, err = git.Config(config.Local, config.Add("user.name", "Hub Agent"), git.CmdExecutor(s.gitExecutor))
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, output)
-	}
-
-	return nil
-}
-
-func (s *Store) updateOriginURL() error {
-	url, err := git.Remote(remote.GetURL("origin"), git.CmdExecutor(s.gitExecutor))
-	if err != nil {
-		return fmt.Errorf("get remote URL %w", err)
-	}
-
-	if url != s.gitRepo {
-		// This case happens when the agent restart and the token is updated.
-		// In this case, we need to update the URL of the origin remote.
-		_, err = git.Remote(remote.SetURL("origin", s.gitRepo, ""), git.CmdExecutor(s.gitExecutor))
+		patch, newTopology, err := s.buildPatch(s.lastTopology, st)
 		if err != nil {
-			return fmt.Errorf("set remote URL %w", err)
+			return fmt.Errorf("build topology patch: %w", err)
 		}
-	}
+		if patch == nil {
+			return nil
+		}
 
-	return nil
+		s.lastKnownVersion, err = s.platform.PatchTopology(ctx, patch, s.lastKnownVersion)
+		if err == nil {
+			s.lastTopology = newTopology
+			return nil
+		}
+
+		var apiErr platform.APIError
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
+			return fmt.Errorf("patch topology: %w", err)
+		}
+
+		retryCount++
+		if retryCount >= s.maxPatchRetry {
+			return errors.New("too many retries")
+		}
+
+		log.Ctx(ctx).Warn().Err(err).Msg("Unable to patch topology")
+	}
 }
 
-func disableGitSSLVerify() bool {
-	_, exists := os.LookupEnv("DISABLE_GIT_SSL_VERIFY")
-	return exists
+func (s *Store) buildPatch(lastTopology []byte, st topology.Cluster) ([]byte, []byte, error) {
+	newTopology, err := json.Marshal(st)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal topology: %w", err)
+	}
+
+	if bytes.Equal(newTopology, lastTopology) {
+		return nil, newTopology, nil
+	}
+
+	patch, err := jsonpatch.CreateMergePatch(lastTopology, newTopology)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build merge patch: %w", err)
+	}
+	return patch, newTopology, nil
 }

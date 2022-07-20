@@ -15,22 +15,6 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
-package topology
+package store
 
-// Cluster describes a Cluster.
-type Cluster struct {
-	Services map[string]*Service `json:"services"`
-}
-
-// Service describes a Service.
-type Service struct {
-	Name      string     `json:"name"`
-	Container *Container `json:"container,omitempty"`
-	Ports     []int      `json:"externalPorts,omitempty"`
-}
-
-// Container describes a container.
-type Container struct {
-	Name     string   `json:"name"`
-	Networks []string `json:"networks"`
-}
+// mocktail:PlatformClient

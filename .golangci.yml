@@ -118,6 +118,7 @@ issues:
         - gochecknoinits
         - gochecknoglobals
         - maintidx
+        - nosnakecase
     - path: pkg/version/version.go
       linters:
         - gochecknoglobals
@@ -130,3 +131,6 @@ issues:
     # InsecureSkipVerify option set true on purpose.
     - path: pkg/traefik/client.go
       text: 'G402: TLS InsecureSkipVerify set true.'
+    - path: pkg/platform/client_test.go
+      linters:
+        - gocognit
